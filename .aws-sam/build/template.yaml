@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless Job Queue System
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.11
+    MemorySize: 256
+    Environment:
+      Variables:
+        JOBS_TABLE:
+          Ref: JobsTable
+        JOBS_QUEUE:
+          Ref: JobsQueue
+Resources:
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: jobs
+      AttributeDefinitions:
+      - AttributeName: job_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: job_id
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+  JobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: jobs-queue
+      VisibilityTimeout: 60
+  ApiGatewayApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: '''*'''
+        AllowHeaders: '''*'''
+        AllowOrigin: '''*'''
+  SubmitJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: SubmitJobFunction
+      Handler: lambdas.submit_job.handler
+      Events:
+        SubmitJobApi:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ApiGatewayApi
+            Path: /jobs
+            Method: POST
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: JobsTable
+      - SQSSendMessagePolicy:
+          QueueName:
+            Fn::GetAtt:
+            - JobsQueue
+            - QueueName
+    Metadata:
+      SamResourceId: SubmitJobFunction
+  ProcessJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ProcessJobFunction
+      Handler: lambdas.process_job.handler
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - JobsQueue
+              - Arn
+            BatchSize: 1
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: JobsTable
+    Metadata:
+      SamResourceId: ProcessJobFunction
+  GetJobStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: GetJobStatusFunction
+      Handler: lambdas.get_status.handler
+      Events:
+        GetJobApi:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: ApiGatewayApi
+            Path: /jobs/{job_id}
+            Method: GET
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: JobsTable
+    Metadata:
+      SamResourceId: GetJobStatusFunction
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value:
+      Fn::Sub: https://${ApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/prod/
+  JobsTableName:
+    Description: DynamoDB table name
+    Value:
+      Ref: JobsTable
+  JobsQueueUrl:
+    Description: SQS queue URL
+    Value:
+      Ref: JobsQueue
